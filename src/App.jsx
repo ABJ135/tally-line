@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Pencil, Check, X, Flag, RotateCcw, Trophy, ChevronRight, Plus, Minus, ArrowLeft, PartyPopper } from 'lucide-react';
+import { Pencil, Check, X, Flag, RotateCcw, Trophy, ChevronRight, Plus, Minus, ArrowLeft, PartyPopper, Clock } from 'lucide-react';
 
 /* ---------------------------------------------------------------
    TALLY LINE — a "race to the number" scorekeeper.
@@ -27,7 +27,7 @@ const COLORS = {
   dangerSoft: 'rgba(226,99,122,0.14)',
 };
 
-const STORAGE_KEY = 'tallyline_state_v1';
+const STORAGE_KEY = 'tallyline_state_v2';
 
 function loadState() {
   try {
@@ -48,9 +48,13 @@ function loadState() {
     );
     if (!valid) return null;
     return {
-      players: parsed.players,
+      players: parsed.players.map((p) => ({
+        ...p,
+        history: Array.isArray(p.history) ? p.history : [],
+      })),
       currentPlayerIndex: Number.isInteger(parsed.currentPlayerIndex) ? parsed.currentPlayerIndex : 0,
       gameStarted: Boolean(parsed.gameStarted),
+      startTime: typeof parsed.startTime === 'number' && Number.isFinite(parsed.startTime) ? parsed.startTime : null,
     };
   } catch (e) {
     return null;
@@ -88,6 +92,25 @@ function round2(n) {
 function fmt(n) {
   if (!Number.isFinite(n)) return '0';
   return round2(n).toString();
+}
+
+/* Apply a score delta to a player (can go negative, e.g. fouls taking a
+   score below zero) and record the event so it can be shown later in the
+   History tab. */
+function applyScoreToPlayer(player, delta) {
+  const newC = round2(player.cNumber + delta);
+  const history = [...(player.history || []), { delta: round2(delta), result: newC }];
+  return { ...player, cNumber: newC, history };
+}
+
+function formatElapsed(totalSeconds) {
+  const safe = Number.isFinite(totalSeconds) && totalSeconds > 0 ? Math.floor(totalSeconds) : 0;
+  const h = Math.floor(safe / 3600);
+  const m = Math.floor((safe % 3600) / 60);
+  const s = safe % 60;
+  const mm = String(m).padStart(2, '0');
+  const ss = String(s).padStart(2, '0');
+  return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
 }
 
 /* ---------------------------- small UI atoms ---------------------------- */
@@ -194,7 +217,8 @@ function Toast({ message }) {
 /* The signature element: a horizontal "finish line" track showing how far
    a player's current number has travelled toward their target. */
 function FinishTrack({ current, target, winner }) {
-  const pct = target > 0 ? Math.min(100, (current / target) * 100) : 0;
+  const rawPct = target > 0 ? (current / target) * 100 : 0;
+  const pct = Math.min(100, Math.max(0, rawPct));
   const ticks = [0, 25, 50, 75, 100];
   return (
     <div className="mt-5">
@@ -263,20 +287,29 @@ function Modal({ title, description, confirmLabel, onConfirm, onCancel, danger }
   );
 }
 
-function Navbar({ view, setView, onResetClick, playerCount }) {
+function Navbar({ view, setView, onResetClick, playerCount, elapsedSeconds }) {
   const tabs = [
     { id: 'game', label: 'Game' },
     { id: 'results', label: 'Results' },
+    { id: 'history', label: 'History' },
   ];
   return (
     <div className="sticky top-0 z-30 border-b backdrop-blur" style={{ backgroundColor: 'rgba(11,18,32,0.92)', borderColor: COLORS.borderSoft }}>
-      <div className="mx-auto flex max-w-2xl items-center justify-between px-4 py-3 sm:px-6">
-        <div className="flex items-baseline gap-2">
+      <div className="mx-auto flex max-w-2xl items-center justify-between gap-2 px-4 py-3 sm:px-6">
+        <div className="flex min-w-0 items-baseline gap-2">
           <span className="text-xl font-black tracking-wide" style={{ fontFamily: "'Bebas Neue', sans-serif", color: COLORS.text, letterSpacing: '0.04em' }}>
             TALLY LINE
           </span>
           <span className="hidden text-xs font-medium sm:inline" style={{ color: COLORS.textMuted }}>
             {playerCount} {playerCount === 1 ? 'player' : 'players'}
+          </span>
+          <span
+            className="inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold tabular-nums"
+            style={{ color: COLORS.textMuted, backgroundColor: COLORS.surfaceAlt }}
+            title="Elapsed time"
+          >
+            <Clock size={10} />
+            {formatElapsed(elapsedSeconds)}
           </span>
         </div>
         <div className="flex items-center gap-1">
@@ -285,7 +318,7 @@ function Navbar({ view, setView, onResetClick, playerCount }) {
               <button
                 key={t.id}
                 onClick={() => setView(t.id)}
-                className="rounded-full px-3.5 py-1.5 text-xs font-bold tracking-wide transition-colors sm:px-4"
+                className="rounded-full px-3 py-1.5 text-xs font-bold tracking-wide transition-colors sm:px-4"
                 style={{
                   backgroundColor: view === t.id ? COLORS.accent : 'transparent',
                   color: view === t.id ? '#1A1300' : COLORS.textDim,
@@ -356,6 +389,7 @@ function Dashboard({ onGameStart }) {
       name: p.name.trim(),
       tNumber: round2(Number(p.tNumber)),
       cNumber: 0,
+      history: [],
     }));
     setError('');
     onGameStart(finalPlayers);
@@ -496,7 +530,7 @@ function Dashboard({ onGameStart }) {
 
 /* -------------------------------- Game view ------------------------------- */
 
-function GameView({ players, currentPlayerIndex, onAdd, onEditSave, onNext, onEnd }) {
+function GameView({ players, currentPlayerIndex, onAdd, onEditSave, onPrevious, onNext, onViewResults }) {
   const [scoreInput, setScoreInput] = useState('');
   const [scoreError, setScoreError] = useState('');
   const [mode, setMode] = useState('add'); // 'add' | 'subtract' (fouls / penalties)
@@ -531,7 +565,7 @@ function GameView({ players, currentPlayerIndex, onAdd, onEditSave, onNext, onEn
         <p className="mt-2 max-w-xs text-sm" style={{ color: COLORS.textDim }}>
           Every player has crossed their finish line. Check the results to see how it played out.
         </p>
-        <PrimaryButton className="mt-6" onClick={onEnd}>
+        <PrimaryButton className="mt-6" onClick={onViewResults}>
           View results <ChevronRight size={16} />
         </PrimaryButton>
       </div>
@@ -539,6 +573,16 @@ function GameView({ players, currentPlayerIndex, onAdd, onEditSave, onNext, onEn
   }
 
   const winner = isWinner(player);
+
+  function getPendingDelta() {
+    const trimmed = scoreInput.trim();
+    if (trimmed === '') return { ok: true, delta: 0 };
+    const magnitude = Number(trimmed);
+    if (!Number.isFinite(magnitude) || magnitude <= 0) {
+      return { ok: false };
+    }
+    return { ok: true, delta: mode === 'subtract' ? -magnitude : magnitude };
+  }
 
   function submitScore() {
     if (winner) return;
@@ -554,6 +598,25 @@ function GameView({ players, currentPlayerIndex, onAdd, onEditSave, onNext, onEn
     setScoreError('');
   }
 
+  function handlePreviousClick() {
+    onPrevious(safeIndex);
+  }
+
+  function handleNextClick() {
+    if (winner) {
+      onNext(safeIndex, 0);
+      return;
+    }
+    const pending = getPendingDelta();
+    if (!pending.ok) {
+      setScoreError('Enter a positive number, or clear the field to skip.');
+      return;
+    }
+    onNext(safeIndex, pending.delta);
+    setScoreInput('');
+    setScoreError('');
+  }
+
   function startEdit() {
     setEditValue(String(player.cNumber));
     setEditing(true);
@@ -563,8 +626,8 @@ function GameView({ players, currentPlayerIndex, onAdd, onEditSave, onNext, onEn
   function saveEdit() {
     const trimmed = editValue.trim();
     const val = Number(trimmed);
-    if (trimmed === '' || !Number.isFinite(val) || val < 0) {
-      setEditError('Enter a number 0 or greater.');
+    if (trimmed === '' || !Number.isFinite(val)) {
+      setEditError('Enter a valid number.');
       return;
     }
     onEditSave(safeIndex, val);
@@ -721,16 +784,19 @@ function GameView({ players, currentPlayerIndex, onAdd, onEditSave, onNext, onEn
               </button>
             </div>
             <ErrorText>{scoreError}</ErrorText>
+            <p className="mt-1.5 text-[11px]" style={{ color: COLORS.textMuted }}>
+              Haven't hit Add yet? Pressing Next below will apply this score automatically.
+            </p>
           </div>
         )}
 
         <div className="mt-6 flex gap-3">
-          <SecondaryButton full onClick={() => onNext(safeIndex)}>
+          <SecondaryButton full onClick={handlePreviousClick}>
+            <ArrowLeft size={15} /> Previous
+          </SecondaryButton>
+          <PrimaryButton full onClick={handleNextClick}>
             Next <ChevronRight size={15} />
-          </SecondaryButton>
-          <SecondaryButton full tone="danger" onClick={onEnd}>
-            End
-          </SecondaryButton>
+          </PrimaryButton>
         </div>
       </div>
     </div>
@@ -739,16 +805,42 @@ function GameView({ players, currentPlayerIndex, onAdd, onEditSave, onNext, onEn
 
 /* ------------------------------ Results view ------------------------------ */
 
-function ResultsView({ players }) {
+function ResultsView({ players, elapsedSeconds, onBackToGame }) {
   if (players.length === 0) return null;
   return (
     <div className="mx-auto max-w-2xl px-4 py-8 sm:px-6">
+      <button
+        onClick={onBackToGame}
+        className="mb-6 inline-flex items-center gap-1.5 text-sm font-semibold"
+        style={{ color: COLORS.textMuted }}
+      >
+        <ArrowLeft size={14} /> Back to game
+      </button>
+
       <h2 className="text-2xl font-black" style={{ fontFamily: "'Bebas Neue', sans-serif", color: COLORS.text, letterSpacing: '0.02em' }}>
         RESULTS
       </h2>
       <p className="mt-1 text-sm" style={{ color: COLORS.textDim }}>
         Live standings — updates the moment a score changes.
       </p>
+
+      {/* prominent elapsed-time card */}
+      <div
+        className="mt-5 flex items-center gap-3 rounded-2xl border p-4"
+        style={{ backgroundColor: COLORS.surfaceRaised, borderColor: COLORS.border }}
+      >
+        <div className="flex h-10 w-10 items-center justify-center rounded-xl" style={{ backgroundColor: COLORS.accentSoft }}>
+          <Clock size={18} style={{ color: COLORS.accent }} />
+        </div>
+        <div>
+          <div className="text-xs font-bold uppercase tracking-widest" style={{ color: COLORS.textMuted }}>
+            Elapsed time
+          </div>
+          <div className="text-3xl font-black leading-none" style={{ fontFamily: "'Bebas Neue', sans-serif", color: COLORS.text }}>
+            {formatElapsed(elapsedSeconds)}
+          </div>
+        </div>
+      </div>
 
       {/* desktop table */}
       <div className="mt-6 hidden overflow-hidden rounded-2xl border sm:block" style={{ borderColor: COLORS.border }}>
@@ -835,6 +927,92 @@ function ResultsView({ players }) {
   );
 }
 
+/* ------------------------------ History view ------------------------------ */
+
+function HistoryView({ players }) {
+  if (players.length === 0) return null;
+  const maxLen = players.reduce((m, p) => Math.max(m, (p.history || []).length), 0);
+
+  return (
+    <div className="mx-auto max-w-2xl px-4 py-8 sm:px-6">
+      <h2 className="text-2xl font-black" style={{ fontFamily: "'Bebas Neue', sans-serif", color: COLORS.text, letterSpacing: '0.02em' }}>
+        SCORE HISTORY
+      </h2>
+      <p className="mt-1 text-sm" style={{ color: COLORS.textDim }}>
+        Every score entered this game, in the order it happened. Green is a gain, red is a foul or deduction.
+      </p>
+
+      {maxLen === 0 ? (
+        <div className="mt-6 rounded-2xl border p-6 text-center" style={{ backgroundColor: COLORS.surface, borderColor: COLORS.border }}>
+          <p className="text-sm" style={{ color: COLORS.textDim }}>
+            No scores recorded yet. Add a score in the Game tab to see history build up here.
+          </p>
+        </div>
+      ) : (
+        <div className="mt-6 overflow-x-auto rounded-2xl border" style={{ borderColor: COLORS.border }}>
+          <table className="w-full border-collapse text-left">
+            <thead>
+              <tr style={{ backgroundColor: COLORS.surfaceAlt }}>
+                <th
+                  className="sticky left-0 whitespace-nowrap px-4 py-3 text-xs font-bold uppercase tracking-widest"
+                  style={{ color: COLORS.textMuted, backgroundColor: COLORS.surfaceAlt }}
+                >
+                  Player
+                </th>
+                {Array.from({ length: maxLen }, (_, i) => i + 1).map((n) => (
+                  <th
+                    key={n}
+                    className="whitespace-nowrap px-3 py-3 text-center text-xs font-bold uppercase tracking-widest"
+                    style={{ color: COLORS.textMuted }}
+                  >
+                    Score: {n}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {players.map((p) => (
+                <tr key={p.id} className="border-t" style={{ borderColor: COLORS.borderSoft, backgroundColor: COLORS.surface }}>
+                  <td
+                    className="sticky left-0 whitespace-nowrap px-4 py-3 text-sm font-bold"
+                    style={{ color: COLORS.text, backgroundColor: COLORS.surface }}
+                  >
+                    {p.name}
+                  </td>
+                  {Array.from({ length: maxLen }, (_, i) => i).map((i) => {
+                    const entry = (p.history || [])[i];
+                    if (!entry) {
+                      return (
+                        <td key={i} className="px-3 py-3 text-center text-sm" style={{ color: COLORS.textMuted }}>
+                          —
+                        </td>
+                      );
+                    }
+                    const positive = entry.delta >= 0;
+                    return (
+                      <td
+                        key={i}
+                        className="px-3 py-3 text-center text-sm font-bold"
+                        style={{
+                          backgroundColor: positive ? COLORS.successSoft : COLORS.dangerSoft,
+                          color: positive ? COLORS.success : COLORS.danger,
+                        }}
+                        title={`${entry.delta > 0 ? '+' : ''}${fmt(entry.delta)}`}
+                      >
+                        {fmt(entry.result)}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* --------------------------------- App root -------------------------------- */
 
 export default function App() {
@@ -843,6 +1021,8 @@ export default function App() {
   const [players, setPlayers] = useState(restored?.players || []);
   const [currentPlayerIndex, setCurrentPlayerIndex] = useState(restored?.currentPlayerIndex || 0);
   const [gameStarted, setGameStarted] = useState(restored?.gameStarted || false);
+  const [startTime, setStartTime] = useState(restored?.startTime || null);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [view, setView] = useState('game');
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [toast, setToast] = useState('');
@@ -859,9 +1039,22 @@ export default function App() {
 
   useEffect(() => {
     if (gameStarted) {
-      saveState({ players, currentPlayerIndex, gameStarted });
+      saveState({ players, currentPlayerIndex, gameStarted, startTime });
     }
-  }, [players, currentPlayerIndex, gameStarted]);
+  }, [players, currentPlayerIndex, gameStarted, startTime]);
+
+  // Timer: starts exactly once (when Start Game sets startTime) and ticks
+  // once a second for as long as the game is active — independent of tab.
+  useEffect(() => {
+    if (!gameStarted || !startTime) {
+      setElapsedSeconds(0);
+      return;
+    }
+    const tick = () => setElapsedSeconds(Math.max(0, Math.floor((Date.now() - startTime) / 1000)));
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [gameStarted, startTime]);
 
   useEffect(() => {
     if (!toast) return;
@@ -873,12 +1066,13 @@ export default function App() {
     setPlayers(finalPlayers);
     setCurrentPlayerIndex(0);
     setGameStarted(true);
+    setStartTime(Date.now());
     setView('game');
   }
 
   function handleAdd(index, val) {
     setPlayers((prev) => {
-      const updated = prev.map((p, i) => (i === index ? { ...p, cNumber: Math.max(0, round2(p.cNumber + val)) } : p));
+      const updated = prev.map((p, i) => (i === index ? applyScoreToPlayer(p, val) : p));
       if (isWinner(updated[index]) && !isWinner(prev[index])) {
         setToast(`${updated[index].name} crossed the finish line!`);
       }
@@ -890,22 +1084,49 @@ export default function App() {
     setPlayers((prev) => prev.map((p, i) => (i === index ? { ...p, cNumber: round2(val) } : p)));
   }
 
-  function handleNext(fromIndex) {
+  // Next now also commits whatever score is pending for the current player
+  // before advancing, so nothing typed is ever lost.
+  function handleNext(fromIndex, pendingDelta) {
     setPlayers((prevPlayers) => {
-      if (prevPlayers.length === 0 || prevPlayers.every(isWinner)) return prevPlayers;
+      if (prevPlayers.length === 0) return prevPlayers;
+
+      let updated = prevPlayers;
+      if (pendingDelta) {
+        const wasWinner = isWinner(prevPlayers[fromIndex]);
+        updated = prevPlayers.map((p, i) => (i === fromIndex ? applyScoreToPlayer(p, pendingDelta) : p));
+        if (!wasWinner && isWinner(updated[fromIndex])) {
+          setToast(`${updated[fromIndex].name} crossed the finish line!`);
+        }
+      }
+
+      if (updated.every(isWinner)) {
+        return updated;
+      }
+
       let idx = fromIndex;
-      for (let i = 0; i < prevPlayers.length; i++) {
-        idx = (idx + 1) % prevPlayers.length;
-        if (!isWinner(prevPlayers[idx])) {
+      for (let i = 0; i < updated.length; i++) {
+        idx = (idx + 1) % updated.length;
+        if (!isWinner(updated[idx])) {
           setCurrentPlayerIndex(idx);
           break;
         }
       }
+      return updated;
+    });
+  }
+
+  // Lets a player step back to the previous lane, e.g. after accidentally
+  // pressing Next. Does not touch anyone's score.
+  function handlePrevious(fromIndex) {
+    setPlayers((prevPlayers) => {
+      if (prevPlayers.length === 0) return prevPlayers;
+      const idx = (fromIndex - 1 + prevPlayers.length) % prevPlayers.length;
+      setCurrentPlayerIndex(idx);
       return prevPlayers;
     });
   }
 
-  function handleEnd() {
+  function handleViewResults() {
     setView('results');
   }
 
@@ -918,6 +1139,8 @@ export default function App() {
     setPlayers([]);
     setCurrentPlayerIndex(0);
     setGameStarted(false);
+    setStartTime(null);
+    setElapsedSeconds(0);
     setView('game');
     setShowResetConfirm(false);
   }
@@ -944,19 +1167,28 @@ export default function App() {
         <Dashboard onGameStart={handleGameStart} />
       ) : (
         <>
-          <Navbar view={view} setView={setView} onResetClick={handleResetClick} playerCount={players.length} />
-          {view === 'game' ? (
+          <Navbar
+            view={view}
+            setView={setView}
+            onResetClick={handleResetClick}
+            playerCount={players.length}
+            elapsedSeconds={elapsedSeconds}
+          />
+          {view === 'game' && (
             <GameView
               players={players}
               currentPlayerIndex={currentPlayerIndex}
               onAdd={handleAdd}
               onEditSave={handleEditSave}
+              onPrevious={handlePrevious}
               onNext={handleNext}
-              onEnd={handleEnd}
+              onViewResults={handleViewResults}
             />
-          ) : (
-            <ResultsView players={players} />
           )}
+          {view === 'results' && (
+            <ResultsView players={players} elapsedSeconds={elapsedSeconds} onBackToGame={() => setView('game')} />
+          )}
+          {view === 'history' && <HistoryView players={players} />}
         </>
       )}
     </div>
