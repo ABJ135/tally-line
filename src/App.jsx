@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Pencil, Check, X, Flag, RotateCcw, Trophy, ChevronRight, Plus, ArrowLeft, PartyPopper } from 'lucide-react';
+import { Pencil, Check, X, Flag, RotateCcw, Trophy, ChevronRight, Plus, Minus, ArrowLeft, PartyPopper } from 'lucide-react';
 
 /* ---------------------------------------------------------------
    TALLY LINE — a "race to the number" scorekeeper.
@@ -499,6 +499,7 @@ function Dashboard({ onGameStart }) {
 function GameView({ players, currentPlayerIndex, onAdd, onEditSave, onNext, onEnd }) {
   const [scoreInput, setScoreInput] = useState('');
   const [scoreError, setScoreError] = useState('');
+  const [mode, setMode] = useState('add'); // 'add' | 'subtract' (fouls / penalties)
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState('');
   const [editError, setEditError] = useState('');
@@ -511,6 +512,7 @@ function GameView({ players, currentPlayerIndex, onAdd, onEditSave, onNext, onEn
   useEffect(() => {
     setScoreInput('');
     setScoreError('');
+    setMode('add');
     setEditing(false);
     setEditError('');
   }, [safeIndex]);
@@ -541,12 +543,13 @@ function GameView({ players, currentPlayerIndex, onAdd, onEditSave, onNext, onEn
   function submitScore() {
     if (winner) return;
     const trimmed = scoreInput.trim();
-    const val = Number(trimmed);
-    if (!trimmed || !Number.isFinite(val) || val <= 0) {
+    const magnitude = Number(trimmed);
+    if (!trimmed || !Number.isFinite(magnitude) || magnitude <= 0) {
       setScoreError('Enter a positive number.');
       return;
     }
-    onAdd(safeIndex, val);
+    const delta = mode === 'subtract' ? -magnitude : magnitude;
+    onAdd(safeIndex, delta);
     setScoreInput('');
     setScoreError('');
   }
@@ -670,21 +673,51 @@ function GameView({ players, currentPlayerIndex, onAdd, onEditSave, onNext, onEn
           </div>
         ) : (
           <div className="mt-6">
-            <FieldLabel>Add to score</FieldLabel>
+            <div className="flex items-center justify-between">
+              <FieldLabel>Update score</FieldLabel>
+              <div className="mb-1.5 flex rounded-full border p-0.5" style={{ borderColor: COLORS.border, backgroundColor: COLORS.surfaceAlt }}>
+                <button
+                  type="button"
+                  onClick={() => setMode('add')}
+                  className="flex items-center gap-1 rounded-full px-3 py-1 text-xs font-bold transition-colors"
+                  style={{
+                    backgroundColor: mode === 'add' ? COLORS.accent : 'transparent',
+                    color: mode === 'add' ? '#1A1300' : COLORS.textDim,
+                  }}
+                >
+                  <Plus size={12} /> Add
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMode('subtract')}
+                  className="flex items-center gap-1 rounded-full px-3 py-1 text-xs font-bold transition-colors"
+                  style={{
+                    backgroundColor: mode === 'subtract' ? COLORS.danger : 'transparent',
+                    color: mode === 'subtract' ? '#2B0410' : COLORS.textDim,
+                  }}
+                >
+                  <Minus size={12} /> Foul
+                </button>
+              </div>
+            </div>
             <div className="flex gap-2">
               <TextInput
                 type="number"
                 inputMode="decimal"
                 value={scoreInput}
                 onChange={(e) => setScoreInput(e.target.value)}
-                placeholder="Enter a number"
+                placeholder={mode === 'subtract' ? 'Points to deduct' : 'Enter a number'}
               />
               <button
                 onClick={submitScore}
                 className="flex shrink-0 items-center gap-1.5 rounded-xl px-5 py-3 text-sm font-bold"
-                style={{ backgroundColor: COLORS.accent, color: '#1A1300' }}
+                style={{
+                  backgroundColor: mode === 'subtract' ? COLORS.danger : COLORS.accent,
+                  color: mode === 'subtract' ? '#2B0410' : '#1A1300',
+                }}
               >
-                <Plus size={16} /> Add
+                {mode === 'subtract' ? <Minus size={16} /> : <Plus size={16} />}
+                {mode === 'subtract' ? 'Subtract' : 'Add'}
               </button>
             </div>
             <ErrorText>{scoreError}</ErrorText>
@@ -845,7 +878,7 @@ export default function App() {
 
   function handleAdd(index, val) {
     setPlayers((prev) => {
-      const updated = prev.map((p, i) => (i === index ? { ...p, cNumber: round2(p.cNumber + val) } : p));
+      const updated = prev.map((p, i) => (i === index ? { ...p, cNumber: Math.max(0, round2(p.cNumber + val)) } : p));
       if (isWinner(updated[index]) && !isWinner(prev[index])) {
         setToast(`${updated[index].name} crossed the finish line!`);
       }
