@@ -951,7 +951,7 @@ function HistoryView({ players }) {
         SCORE HISTORY
       </h2>
       <p className="mt-1 text-sm" style={{ color: COLORS.textDim }}>
-        Every score entered this game, in the order it happened. Green is a gain, red is a foul or deduction.
+        Every score entered this game, in the order it happened. The small number in the corner of each cell is what was added or removed that turn; the big number is the running total.
       </p>
 
       {maxLen === 0 ? (
@@ -1001,16 +1001,23 @@ function HistoryView({ players }) {
                       );
                     }
                     const positive = entry.delta >= 0;
+                    const deltaLabel = `${entry.delta > 0 ? '+' : ''}${fmt(entry.delta)}`;
                     return (
                       <td
                         key={i}
-                        className="px-3 py-3 text-center text-sm font-bold"
+                        className="relative px-3 pb-2 pt-4 text-center text-sm font-bold"
                         style={{
                           backgroundColor: positive ? COLORS.successSoft : COLORS.dangerSoft,
                           color: positive ? COLORS.success : COLORS.danger,
                         }}
-                        title={`${entry.delta > 0 ? '+' : ''}${fmt(entry.delta)}`}
+                        title={deltaLabel}
                       >
+                        <span
+                          className="absolute left-1 top-0.5 text-[9px] font-semibold leading-none opacity-80"
+                          style={{ color: positive ? COLORS.success : COLORS.danger }}
+                        >
+                          {deltaLabel}
+                        </span>
                         {fmt(entry.result)}
                       </td>
                     );
