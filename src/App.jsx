@@ -807,7 +807,7 @@ function GameView({ players, currentPlayerIndex, onAdd, onEditSave, onPrevious, 
 
 /* ------------------------------ Results view ------------------------------ */
 
-function ResultsView({ players, elapsedSeconds, onBackToGame }) {
+function ResultsView({ players, elapsedSeconds, onBackToGame, onSelectPlayer }) {
   if (players.length === 0) return null;
   return (
     <div className="mx-auto max-w-2xl px-4 py-8 sm:px-6">
@@ -823,7 +823,7 @@ function ResultsView({ players, elapsedSeconds, onBackToGame }) {
         RESULTS
       </h2>
       <p className="mt-1 text-sm" style={{ color: COLORS.textDim }}>
-        Live standings — updates the moment a score changes.
+        Live standings — updates the moment a score changes. Tap a player to jump to their lane.
       </p>
 
       {/* prominent elapsed-time card */}
@@ -857,10 +857,15 @@ function ResultsView({ players, elapsedSeconds, onBackToGame }) {
             </tr>
           </thead>
           <tbody>
-            {players.map((p) => {
+            {players.map((p, i) => {
               const remaining = Math.max(p.tNumber - p.cNumber, 0);
               return (
-                <tr key={p.id} className="border-t" style={{ borderColor: COLORS.borderSoft, backgroundColor: COLORS.surface }}>
+                <tr
+                  key={p.id}
+                  onClick={() => onSelectPlayer(i)}
+                  className="cursor-pointer border-t transition-colors hover:brightness-125"
+                  style={{ borderColor: COLORS.borderSoft, backgroundColor: COLORS.surface }}
+                >
                   <td className="px-4 py-3 text-sm font-bold" style={{ color: COLORS.text }}>
                     {p.name}
                   </td>
@@ -885,10 +890,15 @@ function ResultsView({ players, elapsedSeconds, onBackToGame }) {
 
       {/* mobile cards */}
       <div className="mt-6 space-y-3 sm:hidden">
-        {players.map((p) => {
+        {players.map((p, i) => {
           const remaining = Math.max(p.tNumber - p.cNumber, 0);
           return (
-            <div key={p.id} className="rounded-2xl border p-4" style={{ backgroundColor: COLORS.surface, borderColor: COLORS.border }}>
+            <div
+              key={p.id}
+              onClick={() => onSelectPlayer(i)}
+              className="cursor-pointer rounded-2xl border p-4 transition-colors active:scale-[0.99]"
+              style={{ backgroundColor: COLORS.surface, borderColor: COLORS.border }}
+            >
               <div className="flex items-center justify-between">
                 <span className="text-base font-bold" style={{ color: COLORS.text }}>
                   {p.name}
@@ -1132,6 +1142,13 @@ export default function App() {
     setView('results');
   }
 
+  // Tapping a player card in Results jumps straight to that player's lane
+  // in the Game view — same card, same Next/Previous controls.
+  function handleSelectPlayerFromResults(index) {
+    setCurrentPlayerIndex(index);
+    setView('game');
+  }
+
   function handleResetClick() {
     setShowResetConfirm(true);
   }
@@ -1188,7 +1205,12 @@ export default function App() {
             />
           )}
           {view === 'results' && (
-            <ResultsView players={players} elapsedSeconds={elapsedSeconds} onBackToGame={() => setView('game')} />
+            <ResultsView
+              players={players}
+              elapsedSeconds={elapsedSeconds}
+              onBackToGame={() => setView('game')}
+              onSelectPlayer={handleSelectPlayerFromResults}
+            />
           )}
           {view === 'history' && <HistoryView players={players} />}
         </>
