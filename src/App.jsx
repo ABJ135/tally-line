@@ -765,6 +765,8 @@ function GameView({ players, currentPlayerIndex, onAdd, onEditSave, onPrevious, 
             </div>
             <div className="flex gap-2">
               <TextInput
+                key={safeIndex}
+                autoFocus
                 type="number"
                 inputMode="decimal"
                 value={scoreInput}
